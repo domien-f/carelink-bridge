@@ -9,4 +9,6 @@ export interface Config {
   maxRetryDuration: number;
   verbose: boolean;
   patientId?: string;
+  countryCode: string;
+  language: string;
 }

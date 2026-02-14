@@ -49,5 +49,7 @@ export function loadConfig(): Config {
     maxRetryDuration: parseInt(readEnvString('CARELINK_MAX_RETRY_DURATION', '512')!, 10),
     verbose: !readEnvBool('CARELINK_QUIET', true),
     patientId: readEnvString('CARELINK_PATIENT'),
+    countryCode: readEnvString('MMCONNECT_COUNTRYCODE', 'gb')!,
+    language: readEnvString('MMCONNECT_LANGCODE', 'en')!,
   };
 }

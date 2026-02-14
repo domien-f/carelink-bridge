@@ -26,6 +26,8 @@ const client = new CareLinkClient({
   password: config.password,
   maxRetryDuration: config.maxRetryDuration,
   patientId: config.patientId,
+  countryCode: config.countryCode,
+  lang: config.language,
 });
 
 const baseUrl = config.nsBaseUrl || ('https://' + config.nsHost);

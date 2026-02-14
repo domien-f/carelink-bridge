@@ -144,79 +144,109 @@ export class CareLinkClient {
     return this.fetchAsPatient();
   }
 
-  private async fetchAsCarepartner(_role: string): Promise<CareLinkData> {
-    let patientId = this.options.patientId;
+  private async fetchAsCarepartner(role: string): Promise<CareLinkData> {
+    const resp = await this.axiosInstance.get<CareLinkPatientLink[]>(this.urls.linkedPatients);
+    const patients = resp.data;
 
-    if (!patientId) {
-      const patientsResp = await this.axiosInstance.get<CareLinkPatientLink[]>(this.urls.linkedPatients);
-      if (patientsResp.data?.length > 0) {
-        patientId = patientsResp.data[0].username;
-        logger.log('Using linked patient:', patientId);
-      } else {
-        throw new Error('No linked patients found for care partner account');
-      }
+    if (!patients || patients.length === 0) {
+      throw new Error('No linked patients found for this carepartner account');
     }
 
-    // Get data retrieval URL from country settings
-    logger.log('Fetching country settings from:', this.urls.countrySettings);
+    console.log(`Found ${patients.length} linked patient(s)`);
+    const patient = patients[0];
+    console.log(`Fetching data for patient: ${patient.username}`);
+    
+    const url = this.urls.connectData(Date.now());
+    const dataResp = await this.axiosInstance.get<CareLinkData>(url, {
+      params: {
+        username: patient.username,
+        role: 'carepartner',
+      },
+    });
+
+    logger.log('GET data', url);
+    return dataResp.data;
+  }
+
+  private async fetchBleDeviceData(): Promise<CareLinkData> {
+    console.log('[BLE] Fetching BLE device data');
+    
     const settingsResp = await this.axiosInstance.get<CareLinkCountrySettings>(this.urls.countrySettings);
-    const dataRetrievalUrl = settingsResp.data?.blePereodicDataEndpoint;
-
-    if (!dataRetrievalUrl) {
-      throw new Error('Unable to retrieve data retrieval URL for care partner account');
+    const bleEndpoint = settingsResp.data?.blePereodicDataEndpoint;
+    
+    if (!bleEndpoint) {
+      throw new Error('No BLE endpoint found in country settings');
     }
-
-    logger.log('Data retrieval URL:', dataRetrievalUrl);
-
-    // Try multiple API versions
-    const endpoints = [
-      dataRetrievalUrl,
-      dataRetrievalUrl.replace('/v6/', '/v5/'),
-      dataRetrievalUrl.replace('/v6/', '/v11/'),
-      dataRetrievalUrl.replace('/v5/', '/v6/'),
-      dataRetrievalUrl.replace('/v5/', '/v11/'),
-    ];
-
-    const body = {
+    
+    const userResp = await this.axiosInstance.get<CareLinkUserInfo>(this.urls.me);
+    const patientId = userResp.data?.id;
+    
+    const body: any = {
       username: this.options.username,
-      role: 'carepartner',
-      patientId,
+      role: 'patient',
+      appVersion: 'CareLink Connect 2.0'
     };
-
-    for (const endpoint of endpoints) {
-      try {
-        logger.log('Trying carepartner endpoint:', endpoint);
-        const resp = await this.axiosInstance.post<CareLinkData>(endpoint, body, {
-          headers: { 'Content-Type': 'application/json' },
-        });
-        if (resp.status === 200) {
-          logger.log('GET data (as carepartner)', endpoint);
-          return resp.data;
-        }
-      } catch {
-        logger.log('Endpoint failed:', endpoint);
-      }
+    
+    if (patientId) {
+      body.patientId = patientId;
     }
-
-    throw new Error('All carepartner data endpoints failed');
+    
+    try {
+      const resp = await this.axiosInstance.post<any>(bleEndpoint, body, {
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+        },
+      });
+      
+      if (resp.data && resp.status === 200) {
+        console.log('[BLE] Successfully got data from BLE endpoint');
+        logger.log('GET data', bleEndpoint);
+        return resp.data;
+      }
+      
+      throw new Error('BLE endpoint returned empty data');
+    } catch (e: any) {
+      throw e;
+    }
   }
 
   private async fetchAsPatient(): Promise<CareLinkData> {
-    // Try the monitor endpoint first (works for 7xxG pumps)
     try {
       const resp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
+      
+      if (resp.data && (resp.data as any).deviceFamily) {
+        const deviceFamily = (resp.data as any).deviceFamily;
+        
+        const isBleDevice = deviceFamily && (
+          deviceFamily.includes('BLE') || 
+          deviceFamily.includes('MINIMED') || 
+          deviceFamily.includes('SIMPLERA')
+        );
+        
+        if (isBleDevice) {
+          console.log('[BLE] BLE device detected, fetching from BLE endpoint');
+          return this.fetchBleDeviceData();
+        }
+      }
+      
       if (resp.status === 200 && resp.data && Object.keys(resp.data).length > 1) {
         logger.log('GET data', this.urls.monitorData);
         return resp.data;
       }
-    } catch {
+    } catch (e: any) {
       // Fall through to legacy endpoint
     }
 
-    // Fall back to legacy connect endpoint
     const url = this.urls.connectData(Date.now());
-    logger.log('GET data', url);
     const resp = await this.axiosInstance.get<CareLinkData>(url);
+    
+    if (resp.status === 204 || !resp.data || Object.keys(resp.data).length === 0) {
+      console.log('[Patient] WARNING: Connect endpoint returned no content (HTTP ' + resp.status + ')');
+      console.log('[Patient] This may indicate the device has not uploaded data recently or requires a different endpoint');
+    }
+    
+    logger.log('GET data', url);
     return resp.data;
   }
 
