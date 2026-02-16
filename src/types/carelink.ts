@@ -51,7 +51,20 @@ export interface CareLinkData {
 }
 
 export interface CareLinkUserInfo {
+  id?: string;
+  accountId?: number;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  country?: string;
+  language?: string;
   role: string;
+  loginDateUTC?: string;
+  cpRegistrationStatus?: string | null;
+  accountSuspended?: string | null;
+  needToReconsent?: boolean;
+  mfaRequired?: boolean;
+  mfaEnabled?: boolean;
 }
 
 export interface CareLinkPatientLink {
