@@ -30,6 +30,7 @@ export interface CareLinkData {
   sMedicalDeviceTime: string;
   lastMedicalDeviceDataUpdateServerTime: number;
   medicalDeviceFamily: string;
+  deviceFamily?: string;
   medicalDeviceBatteryLevelPercent: number;
   conduitBatteryLevel: number;
   conduitBatteryStatus: string;
