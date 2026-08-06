@@ -160,7 +160,7 @@ export class CareLinkClient {
     // Check if patient has a BLE device by fetching monitor data first
     try {
       const monitorResp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
-      if (monitorResp.data && this.isBleDevice(monitorResp.data.medicalDeviceFamily)) {
+      if (monitorResp.data && this.isBleDevice(monitorResp.data.deviceFamily || monitorResp.data.medicalDeviceFamily)) {
         logger.log('BLE device detected for carepartner, using BLE endpoint');
         return this.fetchBleDeviceData(patientId, 'carepartner');
       }
@@ -261,9 +261,9 @@ export class CareLinkClient {
     try {
       const resp = await this.axiosInstance.get<CareLinkData>(this.urls.monitorData);
 
-      if (resp.data && this.isBleDevice(resp.data.medicalDeviceFamily)) {
+      if (resp.data && this.isBleDevice(resp.data.deviceFamily || resp.data.medicalDeviceFamily)) {
         logger.log('BLE device detected, using BLE endpoint');
-        return this.fetchBleDeviceData();
+        return this.fetchBleDeviceData(this.options.username);
       }
 
       if (resp.status === 200 && resp.data && Object.keys(resp.data).length > 1) {
