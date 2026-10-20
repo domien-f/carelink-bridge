@@ -179,20 +179,31 @@ export class CareLinkClient {
 
     logger.log('Data retrieval URL:', dataRetrievalUrl);
 
-    // Try multiple API versions
+    // Try multiple API versions.
+    //
+    // The country-settings config hands out a legacy version (v6) while the
+    // app's own discovery document advertises a v13 base URL, so both
+    // directions are spanned. Newest first: the older backends are the ones
+    // that lag behind on newer hardware, and the freshness check below means a
+    // newer endpoint answering with old data no longer ends the search.
     const endpoints = [
+      ...[13, 11, 6, 5].map((v) => dataRetrievalUrl.replace(/\/v\d+\//, `/v${v}/`)),
       dataRetrievalUrl,
-      dataRetrievalUrl.replace('/v6/', '/v5/'),
-      dataRetrievalUrl.replace('/v6/', '/v11/'),
-      dataRetrievalUrl.replace('/v5/', '/v6/'),
-      dataRetrievalUrl.replace('/v5/', '/v11/'),
-    ];
+    ].filter((url, i, all) => all.indexOf(url) === i);
 
     const body: Record<string, string> = {
       username: this.options.username,
       role: 'carepartner',
       patientId,
     };
+
+    // A 200 does not mean this endpoint serves *this* device. A legacy
+    // backend that has not been taught about a device family answers 200 with
+    // the last records it ever held, so accepting the first 200 ends the
+    // search before the newer endpoints are reached. Stale payloads are kept
+    // as a floor, so if nothing anywhere is current we still return the newest
+    // thing we saw — exactly what the old first-200-wins code returned.
+    let staleFallback: CareLinkData | undefined;
 
     for (const endpoint of endpoints) {
       try {
@@ -201,12 +212,22 @@ export class CareLinkClient {
           headers: { 'Content-Type': 'application/json' },
         });
         if (resp.status === 200) {
-          logger.log('GET data (as carepartner)', endpoint);
-          return resp.data;
+          if (isPayloadFresh(resp.data)) {
+            logger.log('GET data (as carepartner)', endpoint);
+            return resp.data;
+          }
+          const age = payloadAgeMinutes(resp.data);
+          logger.log(`Endpoint answered 200 but data is ${age?.toFixed(2)} min old, trying next endpoint`);
+          staleFallback = fresherPayload(staleFallback, resp.data);
         }
       } catch {
         logger.log('Endpoint failed:', endpoint);
       }
+    }
+
+    if (staleFallback) {
+      logger.log('No carepartner endpoint returned current data; using newest available');
+      return staleFallback;
     }
 
     throw new Error('All carepartner data endpoints failed');
@@ -326,4 +347,64 @@ export class CareLinkClient {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * How old a CareLink payload may be before we stop trusting it. Every payload
+ * carries its own clock — `currentServerTime` is the server's "now" for this
+ * response and `lastMedicalDeviceDataUpdateServerTime` is when the device last
+ * reported — so the age needs no clock sync on our side.
+ *
+ * Kept in step with the identical guard in src/transform/index.ts, which
+ * declines to emit entries from a payload older than this.
+ */
+const STALE_DATA_THRESHOLD_MINUTES = 20;
+
+/**
+ * Age of a payload in minutes, or undefined when the payload does not carry
+ * both timestamps and no judgement can be made. Undefined is deliberately
+ * distinct from 0: "unknown" must not be read as either fresh or stale.
+ */
+export function payloadAgeMinutes(data: Partial<CareLinkData> | undefined): number | undefined {
+  if (!data) return undefined;
+  const { currentServerTime, lastMedicalDeviceDataUpdateServerTime } = data;
+  if (typeof currentServerTime !== 'number' || typeof lastMedicalDeviceDataUpdateServerTime !== 'number') {
+    return undefined;
+  }
+  if (!Number.isFinite(currentServerTime) || !Number.isFinite(lastMedicalDeviceDataUpdateServerTime)) {
+    return undefined;
+  }
+  return (currentServerTime - lastMedicalDeviceDataUpdateServerTime) / (60 * 1000);
+}
+
+/**
+ * True when a payload is recent enough to act on. A payload we cannot date is
+ * treated as fresh on purpose: the alternative is discarding real readings
+ * from an endpoint that simply does not send the timestamps. We only reject a
+ * 200 when it positively demonstrates staleness.
+ */
+export function isPayloadFresh(
+  data: Partial<CareLinkData> | undefined,
+  thresholdMinutes: number = STALE_DATA_THRESHOLD_MINUTES,
+): boolean {
+  const age = payloadAgeMinutes(data);
+  if (age === undefined) return true;
+  return age <= thresholdMinutes;
+}
+
+/**
+ * Of two payloads, the one with the most recent device data. An undatable
+ * payload never displaces a datable one, in either argument position.
+ */
+export function fresherPayload<T extends Partial<CareLinkData>>(
+  a: T | undefined,
+  b: T | undefined,
+): T | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const ageA = payloadAgeMinutes(a);
+  const ageB = payloadAgeMinutes(b);
+  if (ageA === undefined) return ageB === undefined ? a : b;
+  if (ageB === undefined) return a;
+  return ageB < ageA ? b : a;
 }
